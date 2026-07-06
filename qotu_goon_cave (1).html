@@ -1,0 +1,1195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>QOTU: Goon Cave</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=VT323&display=swap');
+        
+        body, html {
+            margin: 0; padding: 0; width: 100%; height: 100%;
+            background-color: #000; overflow: hidden;
+            font-family: 'VT323', monospace; user-select: none;
+            color: #fff;
+        }
+        #game-container { position: relative; width: 100%; height: 100%; }
+        #canvas-container { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 1; }
+        
+        /* UI Layers */
+        .ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 10; pointer-events: none; }
+        .pointer-events-auto { pointer-events: auto; }
+        
+        /* RPG Panels */
+        .rpg-panel {
+            background: rgba(10, 10, 15, 0.85);
+            border: 2px solid #555;
+            box-shadow: inset 0 0 10px #000, 0 0 15px rgba(0,0,0,0.8);
+            border-radius: 4px;
+            backdrop-filter: blur(4px);
+        }
+        .btn {
+            background: #222; border: 1px solid #777; color: #fff;
+            padding: 8px 16px; font-family: 'VT323', monospace; font-size: 1.2rem;
+            cursor: pointer; transition: all 0.2s; text-transform: uppercase;
+        }
+        .btn:hover:not(:disabled) { background: #555; transform: scale(1.05); }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .btn:active { transform: scale(0.95); }
+
+        /* Floating Damage */
+        .dmg-text {
+            position: absolute; font-size: 2rem; font-weight: bold;
+            text-shadow: 2px 2px 0 #000, -2px -2px 0 #000, 2px -2px 0 #000, -2px 2px 0 #000;
+            pointer-events: none; z-index: 50;
+            animation: floatUp 1s ease-out forwards;
+        }
+        @keyframes floatUp {
+            0% { transform: translateY(0) scale(1); opacity: 1; }
+            100% { transform: translateY(-50px) scale(1.5); opacity: 0; }
+        }
+
+        /* CRT Overlay CSS fallback/enhancement */
+        .scanlines {
+            background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.06));
+            background-size: 100% 4px, 3px 100%;
+            pointer-events: none;
+        }
+        
+        .dialogue-text { border-right: .15em solid orange; white-space: pre-wrap; margin: 0 auto; letter-spacing: .05em; }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <div id="canvas-container"></div>
+    <div id="scanlines" class="ui-layer scanlines hidden"></div>
+
+    <!-- MAIN MENU -->
+    <div id="ui-menu" class="ui-layer pointer-events-auto flex flex-col items-center justify-center bg-black">
+        <h1 class="text-6xl text-red-700 mb-8 tracking-widest" style="text-shadow: 0 0 20px red;">QOTU: GOON CAVE</h1>
+        <p class="text-gray-400 mb-12 text-xl max-w-lg text-center">Descend into the darkness. Survive the horrors. Find the four.</p>
+        <div class="flex gap-4">
+            <button id="btn-start-pc" class="btn text-2xl px-8 py-4 text-red-500 border-red-800">Play (PC)</button>
+            <button id="btn-start-mobile" class="btn text-2xl px-8 py-4 text-blue-500 border-blue-800">Play (Mobile)</button>
+        </div>
+    </div>
+
+    <!-- STORY INTRO -->
+    <div id="ui-story" class="ui-layer hidden flex-col items-center justify-center bg-black pointer-events-auto px-8 text-center z-20">
+        <div class="max-w-3xl">
+            <p class="text-2xl text-red-400 mb-6 leading-relaxed">
+                Bakura and Scarlet once sealed the Goon Cave after committing something no one in the outside world was ever meant to learn.
+            </p>
+            <p class="text-2xl text-red-400 mb-6 leading-relaxed">
+                Whatever happened inside changed the cave itself—walls shifting, creatures forming from the darkness, and reality bending deeper the further you go.
+            </p>
+            <p class="text-2xl text-red-400 mb-6 leading-relaxed">
+                They still remain down there.<br>
+                Now the entrance has opened again.<br>
+                You are trapped inside.
+            </p>
+            <p class="text-3xl text-red-600 mb-12 font-bold tracking-wider">
+                Escape before they find you… or become the next thing the cave remembers.
+            </p>
+            <button id="btn-start-explore" class="btn text-xl px-12 py-3 text-white border-gray-500">Enter</button>
+        </div>
+    </div>
+
+    <!-- HUD (Exploration) -->
+    <div id="ui-hud" class="ui-layer hidden flex flex-col justify-between p-4">
+        <div class="flex justify-between w-full">
+            <div class="rpg-panel p-3 min-w-[200px]">
+                <div class="text-xl text-red-400">HP: <span id="hud-hp">100/100</span></div>
+                <div class="text-xl text-blue-400">MP: <span id="hud-mp">50/50</span></div>
+                <div class="text-lg text-yellow-300">Level: <span id="hud-lvl">1</span> (<span id="hud-exp">0</span> EXP)</div>
+            </div>
+            <div class="rpg-panel p-3 text-right">
+                <div class="text-gray-300 text-xl" id="hud-zone">Crystal Caverns</div>
+                <div class="text-gray-500" id="hud-coords">X:0 Y:0</div>
+            </div>
+        </div>
+        
+        <!-- Mobile Controls (Exploration) -->
+        <div id="mobile-controls" class="pointer-events-auto flex justify-center mb-4 opacity-50 hover:opacity-100 transition-opacity hidden">
+            <div class="grid grid-cols-3 gap-2">
+                <div></div>
+                <button class="btn p-4" id="btn-move-up">▲</button>
+                <div></div>
+                <button class="btn p-4" id="btn-move-left">◀</button>
+                <button class="btn p-4" id="btn-move-down">▼</button>
+                <button class="btn p-4" id="btn-move-right">▶</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- BATTLE UI -->
+    <div id="ui-battle" class="ui-layer hidden flex flex-col justify-end p-4 pb-8">
+        <div class="w-full max-w-4xl mx-auto flex gap-4 pointer-events-auto">
+            <!-- Enemy Info -->
+            <div class="rpg-panel p-4 flex-1">
+                <h2 id="battle-enemy-name" class="text-3xl text-red-500 mb-2">Enemy Name</h2>
+                <div class="w-full bg-gray-800 h-4 border border-gray-600 rounded mt-2">
+                    <div id="battle-enemy-hp-bar" class="bg-red-600 h-full w-full transition-all duration-300"></div>
+                </div>
+                <p id="battle-log" class="mt-4 text-xl h-16 overflow-hidden text-gray-300">The monster approaches...</p>
+            </div>
+            
+            <!-- Actions -->
+            <div class="rpg-panel p-4 w-64 flex flex-col gap-2">
+                <button id="btn-atk" class="btn text-left text-red-400 border-red-900">⚔ Attack</button>
+                <button id="btn-mag" class="btn text-left text-blue-400 border-blue-900">✨ Magic</button>
+                <button id="btn-item" class="btn text-left text-green-400 border-green-900">🩹 Heal (MP:10)</button>
+                <button id="btn-flee" class="btn text-left text-gray-400">🏃 Flee</button>
+            </div>
+            
+            <!-- Magic Menu (Hidden) -->
+            <div id="magic-menu" class="rpg-panel p-4 w-64 hidden flex-col gap-2 absolute bottom-8 right-[270px]">
+                <!-- Populated dynamically -->
+            </div>
+        </div>
+    </div>
+
+    <!-- DIALOGUE / CUTSCENE -->
+    <div id="ui-dialogue" class="ui-layer hidden flex flex-col justify-end items-center pb-20 pointer-events-auto">
+        <div class="rpg-panel w-3/4 p-6 relative">
+            <h3 id="dialogue-name" class="absolute -top-4 left-4 bg-black px-2 text-2xl text-yellow-500 border border-gray-600">Name</h3>
+            <p id="dialogue-text" class="text-2xl mt-2"></p>
+            <button id="btn-dialogue-next" class="absolute bottom-2 right-4 text-gray-400 hover:text-white text-xl">Next ⯈</button>
+        </div>
+    </div>
+
+    <!-- LEVEL UP / STATS ALLOCATION -->
+    <div id="ui-levelup" class="ui-layer hidden flex items-center justify-center pointer-events-auto bg-black bg-opacity-80">
+        <div class="rpg-panel p-8 w-96 flex flex-col items-center">
+            <h2 class="text-4xl text-yellow-400 mb-2">VICTORY</h2>
+            <p class="text-xl mb-6">Stat Points Available: <span id="stat-points" class="text-green-400 font-bold">0</span></p>
+            
+            <div class="w-full flex flex-col gap-4 mb-6 text-xl">
+                <div class="flex justify-between items-center">
+                    <span>⚔ Attack (<span id="stat-atk">0</span>)</span>
+                    <button class="btn text-sm py-1 px-3 stat-btn" data-stat="atk">+</button>
+                </div>
+                <div class="flex justify-between items-center">
+                    <span>🛡 Defense (<span id="stat-def">0</span>)</span>
+                    <button class="btn text-sm py-1 px-3 stat-btn" data-stat="def">+</button>
+                </div>
+                <div class="flex justify-between items-center">
+                    <span>✨ Mana (<span id="stat-mag">0</span>)</span>
+                    <button class="btn text-sm py-1 px-3 stat-btn" data-stat="mag">+</button>
+                </div>
+                <div class="flex justify-between items-center">
+                    <span>🏃 Agility (<span id="stat-agi">0</span>)</span>
+                    <button class="btn text-sm py-1 px-3 stat-btn" data-stat="agi">+</button>
+                </div>
+                <div class="flex justify-between items-center">
+                    <span>❤️ Vitality (<span id="stat-vit">0</span>)</span>
+                    <button class="btn text-sm py-1 px-3 stat-btn" data-stat="vit">+</button>
+                </div>
+            </div>
+            <button id="btn-continue" class="btn w-full">Continue Exploration</button>
+        </div>
+    </div>
+    
+    <!-- DAMAGE NUMBERS CONTAINER -->
+    <div id="dmg-container" class="ui-layer"></div>
+</div>
+
+<script>
+/**
+ * QOTU: GOON CAVE
+ * A highly polished, single-file 3D Horror RPG.
+ * Procedural generation, custom shaders, and Web Audio synths.
+ */
+
+// ==========================================
+// 1. GAME STATE & CONSTANTS
+// ==========================================
+const STATE = {
+    MENU: 0, EXPLORE: 1, BATTLE: 2, DIALOGUE: 3, STATS: 4, GAMEOVER: 5, STORY: 6
+};
+let currentState = STATE.MENU;
+let isMobileControls = false;
+
+const PLAYER = {
+    x: 1, y: 1, dir: 0, // dir: 0=N, 1=E, 2=S, 3=W
+    stats: {
+        hp: 100, maxHp: 100, mp: 50, maxMp: 50,
+        atk: 5, def: 3, mag: 5, agi: 4, vit: 5,
+        level: 1, exp: 0, statPoints: 0
+    },
+    skills: [{name: "Power Slash", mp: 0, type: 'atk', mult: 1.5, unlocked: true}],
+    moving: false
+};
+
+const SKILL_THRESHOLDS = [
+    {lvl: 3, skill: {name: "Heavy Blow", mp: 0, type: 'atk', mult: 2.0}},
+    {lvl: 6, skill: {name: "Fireball", mp: 15, type: 'mag', mult: 2.5}},
+    {lvl: 12, skill: {name: "Whirlwind", mp: 25, type: 'atk', mult: 3.5}},
+    {lvl: 15, skill: {name: "Lightning", mp: 35, type: 'mag', mult: 4.0}},
+    {lvl: 20, skill: {name: "Goon Strike", mp: 50, type: 'atk', mult: 6.0}}
+];
+
+const MAP_SIZE = 30;
+let mapGrid = [];
+// 0: Floor, 1: Wall, 2: Door, 3: Boss Bakura, 4: Boss Scarlet, 5: Boss Abudy, 6: Boss Querbito
+const BOSS_DEFEATED = { bakura: false, scarlet: false, abudy: false, querbito: false };
+let currentEnemy = null;
+
+// ==========================================
+// 2. AUDIO SYNTHESIS (Web Audio API)
+// ==========================================
+const AudioContext = window.AudioContext || window.webkitAudioContext;
+let actx;
+
+const SFX = {
+    init: () => { if(!actx) actx = new AudioContext(); },
+    playTone: (freq, type, duration, vol=0.1) => {
+        if(!actx) return;
+        const osc = actx.createOscillator();
+        const gain = actx.createGain();
+        osc.type = type; osc.frequency.setValueAtTime(freq, actx.currentTime);
+        osc.connect(gain); gain.connect(actx.destination);
+        osc.start();
+        gain.gain.setValueAtTime(vol, actx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, actx.currentTime + duration);
+        osc.stop(actx.currentTime + duration);
+    },
+    playNoise: (duration, vol=0.1, lowpass=1000) => {
+        if(!actx) return;
+        const bufferSize = actx.sampleRate * duration;
+        const buffer = actx.createBuffer(1, bufferSize, actx.sampleRate);
+        const data = buffer.getChannelData(0);
+        for(let i=0; i<bufferSize; i++) data[i] = Math.random() * 2 - 1;
+        const noise = actx.createBufferSource();
+        noise.buffer = buffer;
+        const filter = actx.createBiquadFilter();
+        filter.type = 'lowpass'; filter.frequency.value = lowpass;
+        const gain = actx.createGain();
+        gain.gain.setValueAtTime(vol, actx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, actx.currentTime + duration);
+        noise.connect(filter); filter.connect(gain); gain.connect(actx.destination);
+        noise.start();
+    },
+    hit: () => SFX.playNoise(0.3, 0.3, 800),
+    crit: () => { SFX.playTone(800, 'square', 0.1, 0.2); SFX.playNoise(0.4, 0.4, 1500); },
+    magic: () => { SFX.playTone(1200, 'sine', 0.5, 0.1); SFX.playTone(800, 'triangle', 0.6, 0.1); },
+    heal: () => SFX.playTone(600, 'sine', 0.8, 0.2),
+    step: () => SFX.playNoise(0.1, 0.05, 300),
+    hover: () => SFX.playTone(400, 'sine', 0.1, 0.05),
+    select: () => SFX.playTone(600, 'square', 0.1, 0.1),
+    ambientDrip: () => { if(Math.random()<0.05) SFX.playTone(1500+Math.random()*500, 'sine', 0.1, 0.02); },
+    ambientDrone: () => { if(Math.random()<0.01) SFX.playTone(50+Math.random()*30, 'sawtooth', 3, 0.01); },
+    roar: () => SFX.playNoise(1.5, 0.4, 400)
+};
+
+// ==========================================
+// 3. THREE.JS & POST-PROCESSING ENGINE
+// ==========================================
+const container = document.getElementById('canvas-container');
+const scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2(0x020205, 0.12); // Deep horror fog
+
+const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
+const renderer = new THREE.WebGLRenderer({ antialias: false });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+container.appendChild(renderer.domElement);
+
+// Lighting
+const ambientLight = new THREE.AmbientLight(0x111122, 0.3);
+scene.add(ambientLight);
+const flashLight = new THREE.PointLight(0xffeedd, 1.5, 8);
+scene.add(flashLight);
+let flashlightFlicker = 0;
+
+// Custom Shader Post-Processing setup (Manual to avoid external composer dependencies)
+const renderTarget = new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight);
+const orthoCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+const orthoScene = new THREE.Scene();
+
+const horrorShader = {
+    uniforms: {
+        tDiffuse: { value: null },
+        time: { value: 0.0 },
+        distortion: { value: 0.15 },
+        rgbShift: { value: 0.003 }
+    },
+    vertexShader: `
+        varying vec2 vUv;
+        void main() {
+            vUv = uv;
+            gl_Position = vec4(position, 1.0);
+        }
+    `,
+    fragmentShader: `
+        uniform sampler2D tDiffuse;
+        uniform float time;
+        uniform float distortion;
+        uniform float rgbShift;
+        varying vec2 vUv;
+
+        // Random noise generator
+        float rand(vec2 co){ return fract(sin(dot(co.xy ,vec2(12.9898,78.233))) * 43758.5453); }
+
+        void main() {
+            vec2 uv = vUv;
+            // Barrel Distortion
+            vec2 cc = uv - 0.5;
+            float dist = dot(cc, cc);
+            uv = uv + cc * (dist * distortion);
+            
+            // Check bounds after distortion
+            if(uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
+                gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+                return;
+            }
+
+            // RGB Shift (Chromatic Aberration) & CRT Scanlines
+            vec2 offset = vec2(rgbShift * (1.0+sin(time*5.0)*0.5), 0.0);
+            float r = texture2D(tDiffuse, uv + offset).r;
+            float g = texture2D(tDiffuse, uv).g;
+            float b = texture2D(tDiffuse, uv - offset).b;
+
+            // Grain
+            float noise = (rand(uv * time) - 0.5) * 0.15;
+            
+            // Scanlines
+            float scanline = sin(uv.y * 800.0 * 3.1415) * 0.04;
+            
+            // Vignette
+            float vignette = smoothstep(0.8, 0.2, length(cc));
+
+            vec3 color = vec3(r, g, b) + noise - scanline;
+            color *= vignette;
+            
+            // Horror tint
+            color = mix(color, vec3(color.r*1.2, color.g*0.9, color.b*0.8), 0.3);
+
+            gl_FragColor = vec4(color, 1.0);
+        }
+    `
+};
+const postMaterial = new THREE.ShaderMaterial({
+    uniforms: horrorShader.uniforms,
+    vertexShader: horrorShader.vertexShader,
+    fragmentShader: horrorShader.fragmentShader
+});
+const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), postMaterial);
+orthoScene.add(quad);
+
+window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderTarget.setSize(window.innerWidth, window.innerHeight);
+});
+
+// ==========================================
+// 4. PROCEDURAL 3D ASSETS & TEXTURES
+// ==========================================
+// Texture Generator
+function createWallTexture(color1, color2) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 256; canvas.height = 256;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = color1; ctx.fillRect(0,0,256,256);
+    for(let i=0; i<1000; i++) {
+        ctx.fillStyle = color2;
+        ctx.fillRect(Math.random()*256, Math.random()*256, Math.random()*10, Math.random()*10);
+    }
+    // Brick pattern
+    ctx.strokeStyle = '#000'; ctx.lineWidth = 2;
+    for(let y=0; y<256; y+=32) {
+        ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(256,y); ctx.stroke();
+        for(let x=0; x<256; x+=64) {
+            let ox = (y/32)%2===0 ? 0 : 32;
+            ctx.beginPath(); ctx.moveTo(x+ox,y); ctx.lineTo(x+ox,y+32); ctx.stroke();
+        }
+    }
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.magFilter = THREE.NearestFilter; // Retro look
+    return tex;
+}
+
+const texWall = createWallTexture('#333', '#222');
+const texFloor = createWallTexture('#1a1a1a', '#111');
+const matWall = new THREE.MeshStandardMaterial({ map: texWall, roughness: 0.9 });
+const matFloor = new THREE.MeshStandardMaterial({ map: texFloor, roughness: 1.0 });
+
+// Helper to create basic shapes for entities
+function addMesh(group, geo, color, x, y, z, transparent=false, opacity=1.0) {
+    const mat = new THREE.MeshStandardMaterial({ 
+        color: color, roughness: 0.7, 
+        transparent: transparent, opacity: opacity 
+    });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.set(x, y, z);
+    group.add(mesh);
+    return mesh;
+}
+
+// Procedural Enemy Generators
+const Models = {
+    Slime: () => {
+        const g = new THREE.Group();
+        const geo = new THREE.SphereGeometry(0.5, 16, 16, 0, Math.PI*2, 0, Math.PI/2);
+        addMesh(g, geo, 0x00ff00, 0, -0.5, 0, true, 0.8);
+        return g;
+    },
+    Spider: () => {
+        const g = new THREE.Group();
+        addMesh(g, new THREE.SphereGeometry(0.3, 8, 8), 0x111111, 0, -0.2, 0); // body
+        addMesh(g, new THREE.SphereGeometry(0.15, 8, 8), 0x331111, 0, -0.2, 0.3); // head
+        // legs
+        for(let i=0; i<8; i++) {
+            const angle = (i/8) * Math.PI*2;
+            const leg = addMesh(g, new THREE.CylinderGeometry(0.02,0.02, 0.6), 0x000000, Math.cos(angle)*0.3, -0.4, Math.sin(angle)*0.3);
+            leg.rotation.x = Math.PI/4; leg.rotation.y = angle;
+        }
+        return g;
+    },
+    Skeleton: () => {
+        const g = new THREE.Group();
+        addMesh(g, new THREE.BoxGeometry(0.3, 0.3, 0.3), 0xdddddd, 0, 0.8, 0); // skull
+        addMesh(g, new THREE.BoxGeometry(0.4, 0.5, 0.2), 0xcccccc, 0, 0.3, 0); // ribs
+        addMesh(g, new THREE.BoxGeometry(0.1, 0.6, 0.1), 0xdddddd, -0.3, 0.3, 0); // arm L
+        addMesh(g, new THREE.BoxGeometry(0.1, 0.6, 0.1), 0xdddddd, 0.3, 0.3, 0); // arm R
+        return g;
+    },
+    Bakura: () => {
+        const g = new THREE.Group();
+        addMesh(g, new THREE.CylinderGeometry(0.25, 0.3, 1.8, 8), 0x111111, 0, 0, 0); // Black suit
+        const head = addMesh(g, new THREE.SphereGeometry(0.2, 16, 16), 0xffffff, 0, 1.1, 0); // Slenderman face
+        
+        // DBZ Spiky Hair
+        const hairGrp = new THREE.Group();
+        for(let i=0; i<7; i++) {
+            const cone = addMesh(hairGrp, new THREE.ConeGeometry(0.1, 0.5, 4), 0x000000, 
+                (Math.random()-0.5)*0.2, 0.2, (Math.random()-0.5)*0.2);
+            cone.rotation.z = (Math.random()-0.5); cone.rotation.x = (Math.random()-0.5);
+        }
+        hairGrp.position.set(0, 1.25, -0.1);
+        g.add(hairGrp);
+        
+        // Halo
+        const halo = addMesh(g, new THREE.TorusGeometry(0.3, 0.03, 8, 24), 0xffff00, 0, 1.8, 0);
+        halo.rotation.x = Math.PI/2;
+        
+        // Aura (particles approximated with shell)
+        addMesh(g, new THREE.SphereGeometry(1.2, 16, 16), 0x000000, 0, 0.5, 0, true, 0.2);
+        return g;
+    },
+    Scarlet: () => {
+        const g = new THREE.Group();
+        addMesh(g, new THREE.CylinderGeometry(0.3, 0.1, 1.5, 8), 0x8b0000, 0, 0, 0); // Crimson body
+        addMesh(g, new THREE.SphereGeometry(0.25, 16, 16), 0x654321, 0, 0.9, 0); // Brown head
+        // Antlers
+        addMesh(g, new THREE.CylinderGeometry(0.05, 0.05, 0.8), 0x3e2723, -0.3, 1.3, 0).rotation.z = Math.PI/4;
+        addMesh(g, new THREE.CylinderGeometry(0.05, 0.05, 0.8), 0x3e2723, 0.3, 1.3, 0).rotation.z = -Math.PI/4;
+        return g;
+    },
+    Abudy: () => {
+        const g = new THREE.Group();
+        addMesh(g, new THREE.BoxGeometry(0.6, 1.2, 0.4), 0x00ff00, 0, 0, 0); // Green body
+        addMesh(g, new THREE.BoxGeometry(0.4, 0.4, 0.4), 0x00cc00, 0, 0.9, 0); // Head
+        
+        // Floating '?'
+        const qGrp = new THREE.Group();
+        const qMat = new THREE.MeshBasicMaterial({color: 0xffffff});
+        const qGeo = new THREE.BoxGeometry(0.05, 0.05, 0.05);
+        const qPoints = [
+            [0,0],[1,0],[2,0],[3,0],
+            [3,-1],[3,-2],[2,-2],[1,-2],
+            [1,-3],[1,-5]
+        ];
+        qPoints.forEach(p => {
+            const m = new THREE.Mesh(qGeo, qMat);
+            m.position.set(p[0]*0.06 - 0.1, p[1]*0.06 + 0.15, 0.25);
+            qGrp.add(m);
+        });
+        qGrp.position.set(0, 0.9, 0);
+        g.add(qGrp);
+        return g;
+    },
+    Querbito: () => {
+        const g = new THREE.Group();
+        addMesh(g, new THREE.BoxGeometry(0.5, 0.7, 0.3), 0xffccaa, 0, 0.35, 0); // Shirtless chest
+        addMesh(g, new THREE.CylinderGeometry(0.3, 0.3, 0.8, 8), 0xff69b4, 0, -0.4, 0); // Pink pants
+        addMesh(g, new THREE.SphereGeometry(0.25, 16, 16), 0xffccaa, 0, 0.9, 0); // Head
+        
+        // Blue Spiky Hair
+        const hairGrp = new THREE.Group();
+        for(let i=0; i<6; i++) {
+            const cone = addMesh(hairGrp, new THREE.ConeGeometry(0.1, 0.6, 4), 0x0000ff, 
+                (Math.random()-0.5)*0.2, 0.3, (Math.random()-0.5)*0.2);
+            cone.rotation.z = (Math.random()-0.5); cone.rotation.x = (Math.random()-0.5);
+        }
+        hairGrp.position.set(0, 1.0, 0);
+        g.add(hairGrp);
+        return g;
+    }
+};
+
+const ENEMY_DB = [
+    { name: "Green Slime", hp: 20, atk: 3, exp: 5, sp: 3, model: 'Slime', scale: 1 },
+    { name: "Cave Bat", hp: 15, atk: 5, exp: 6, sp: 3, model: 'Slime', scale: 0.5 }, // Simplified
+    { name: "Cave Spider", hp: 35, atk: 8, exp: 12, sp: 5, model: 'Spider', scale: 1.5 },
+    { name: "Skeleton Warrior", hp: 50, atk: 12, exp: 20, sp: 5, model: 'Skeleton', scale: 1 },
+    { name: "Shadow Spirit", hp: 40, atk: 15, exp: 25, sp: 8, model: 'Skeleton', scale: 1.2 }
+];
+
+const BOSS_DB = {
+    bakura: { name: "Bakura", hp: 300, atk: 25, exp: 200, sp: 25, model: 'Bakura', scale: 1, dialog: "..." },
+    scarlet: { name: "Scarlet", hp: 250, atk: 30, exp: 180, sp: 20, model: 'Scarlet', scale: 1, dialog: "You dare look upon me? Pathetic insect." },
+    abudy: { name: "Abudy", hp: 200, atk: 15, exp: 150, sp: 15, model: 'Abudy', scale: 1, dialog: "Praise Bakura! Praise Scarlet! Who are you?!" },
+    querbito: { name: "Querbito", hp: 400, atk: 40, exp: 300, sp: 30, model: 'Querbito', scale: 1, dialog: "Behold my ultimate power! HAAAA!" }
+};
+
+// ==========================================
+// 5. DUNGEON GENERATION
+// ==========================================
+const dungeonGroup = new THREE.Group();
+scene.add(dungeonGroup);
+
+function generateMap() {
+    // Clear old
+    while(dungeonGroup.children.length > 0){ 
+        dungeonGroup.remove(dungeonGroup.children[0]); 
+    }
+    
+    // Create grid
+    for(let y=0; y<MAP_SIZE; y++) {
+        let row = [];
+        for(let x=0; x<MAP_SIZE; x++) {
+            // Walls on edge, random pillars
+            if(x===0 || y===0 || x===MAP_SIZE-1 || y===MAP_SIZE-1) row.push(1);
+            else if(Math.random() < 0.2) row.push(1);
+            else row.push(0);
+        }
+        mapGrid.push(row);
+    }
+    
+    // Ensure start is clear
+    mapGrid[1][1] = 0; mapGrid[1][2] = 0; mapGrid[2][1] = 0;
+    
+    // Place Bosses
+    mapGrid[5][5] = 3; // Bakura
+    mapGrid[MAP_SIZE-5][5] = 4; // Scarlet
+    mapGrid[5][MAP_SIZE-5] = 5; // Abudy
+    mapGrid[MAP_SIZE-5][MAP_SIZE-5] = 6; // Querbito
+
+    // Build 3D Meshes
+    const wallGeo = new THREE.BoxGeometry(1, 1, 1);
+    const floorGeo = new THREE.PlaneGeometry(1, 1);
+    
+    for(let y=0; y<MAP_SIZE; y++) {
+        for(let x=0; x<MAP_SIZE; x++) {
+            // Floor
+            const floor = new THREE.Mesh(floorGeo, matFloor);
+            floor.rotation.x = -Math.PI/2;
+            floor.position.set(x, -0.5, y);
+            dungeonGroup.add(floor);
+            
+            // Ceiling
+            const ceil = new THREE.Mesh(floorGeo, matFloor);
+            ceil.rotation.x = Math.PI/2;
+            ceil.position.set(x, 0.5, y);
+            dungeonGroup.add(ceil);
+
+            if(mapGrid[y][x] === 1) {
+                const wall = new THREE.Mesh(wallGeo, matWall);
+                wall.position.set(x, 0, y);
+                dungeonGroup.add(wall);
+            } else if (mapGrid[y][x] >= 3) {
+                // Boss marker light
+                const pl = new THREE.PointLight(0xff0000, 1, 2);
+                pl.position.set(x, 0, y);
+                dungeonGroup.add(pl);
+            }
+        }
+    }
+}
+
+// ==========================================
+// 6. ANIMATION & TWEENING
+// ==========================================
+const Tweens = [];
+function addTween(obj, prop, target, duration, easing="easeOut", onComplete) {
+    Tweens.push({ obj, prop, start: obj[prop], target, duration, time: 0, easing, onComplete });
+}
+function updateTweens(dt) {
+    for(let i=Tweens.length-1; i>=0; i--) {
+        let t = Tweens[i];
+        t.time += dt;
+        let progress = Math.min(t.time / t.duration, 1.0);
+        
+        // Easing
+        let p = progress;
+        if(t.easing === "easeOut") p = 1 - Math.pow(1 - progress, 3);
+        
+        if(typeof t.prop === 'object') {
+             // Handle vector3
+             t.obj.x = t.start.x + (t.target.x - t.start.x) * p;
+             t.obj.y = t.start.y + (t.target.y - t.start.y) * p;
+             t.obj.z = t.start.z + (t.target.z - t.start.z) * p;
+        } else {
+             t.obj[t.prop] = t.start + (t.target - t.start) * p;
+        }
+
+        if(progress === 1.0) {
+            if(t.onComplete) t.onComplete();
+            Tweens.splice(i, 1);
+        }
+    }
+}
+
+// ==========================================
+// 7. GAME LOGIC & CONTROLS
+// ==========================================
+let currentBossId = 0;
+
+function updateHUD() {
+    document.getElementById('hud-hp').innerText = `${PLAYER.stats.hp}/${PLAYER.stats.maxHp}`;
+    document.getElementById('hud-mp').innerText = `${PLAYER.stats.mp}/${PLAYER.stats.maxMp}`;
+    document.getElementById('hud-lvl').innerText = PLAYER.stats.level;
+    document.getElementById('hud-exp').innerText = PLAYER.stats.exp;
+    document.getElementById('hud-coords').innerText = `X:${Math.round(PLAYER.x)} Y:${Math.round(PLAYER.y)}`;
+}
+
+function updateCameraPos() {
+    camera.position.x = PLAYER.x;
+    camera.position.z = PLAYER.y;
+    camera.position.y = 0;
+    
+    let targetRotation = PLAYER.dir * (Math.PI/2);
+    // Handle wrap around for smooth rotation
+    while (camera.rotation.y > targetRotation + Math.PI) targetRotation += Math.PI*2;
+    while (camera.rotation.y < targetRotation - Math.PI) targetRotation -= Math.PI*2;
+    
+    addTween(camera.rotation, 'y', targetRotation, 0.3, "easeOut");
+    flashLight.position.copy(camera.position);
+}
+
+function movePlayer(forward, isDash=false) {
+    if(PLAYER.moving || STATE.EXPLORE !== currentState) return;
+    
+    let dx = 0, dy = 0;
+    if(PLAYER.dir === 0) dy = -1; // North
+    if(PLAYER.dir === 1) dx = -1;  // East
+    if(PLAYER.dir === 2) dy = 1;  // South
+    if(PLAYER.dir === 3) dx = 1; // West
+    
+    if(!forward) { dx*=-1; dy*=-1; }
+
+    let steps = isDash ? 2 : 1;
+    let targetX = PLAYER.x;
+    let targetY = PLAYER.y;
+    let validSteps = 0;
+
+    // Check collision for each step of the movement (allows safe dashing)
+    for(let i=1; i<=steps; i++) {
+        let nx = targetX + dx;
+        let ny = targetY + dy;
+        if(nx>=0 && nx<MAP_SIZE && ny>=0 && ny<MAP_SIZE && mapGrid[ny][nx] !== 1) {
+            targetX = nx;
+            targetY = ny;
+            validSteps++;
+        } else {
+            break; // Hit a wall, stop calculating steps
+        }
+    }
+    
+    if(validSteps > 0) {
+        PLAYER.moving = true;
+        PLAYER.x = targetX; PLAYER.y = targetY;
+        SFX.step();
+        
+        let duration = isDash ? 0.15 : 0.3; // Dash is faster
+        
+        addTween(camera.position, 'x', targetX, duration);
+        addTween(camera.position, 'z', targetY, duration, "easeOut", () => {
+            PLAYER.moving = false;
+            updateHUD();
+            checkTileEvent(targetX, targetY);
+        });
+        
+        // Viewbob
+        addTween(camera.position, 'y', -0.05, duration/2, "easeOut", () => {
+            addTween(camera.position, 'y', 0, duration/2);
+        });
+        flashLight.position.set(targetX, 0, targetY);
+    }
+}
+
+function turnPlayer(right) {
+    if(PLAYER.moving || STATE.EXPLORE !== currentState) return;
+    PLAYER.dir = (PLAYER.dir + (right ? 1 : -1) + 4) % 4;
+    updateCameraPos();
+}
+
+function checkTileEvent(x, y) {
+    const tile = mapGrid[y][x];
+    if(tile >= 3 && tile <= 6) {
+        // Boss Tile
+        let bossKey = Object.keys(BOSS_DB)[tile-3];
+        if(!BOSS_DEFEATED[bossKey]) {
+            currentBossId = tile;
+            startDialogue(BOSS_DB[bossKey]);
+            return;
+        }
+    }
+    
+    // Random Encounter (10% chance)
+    if(Math.random() < 0.1) {
+        let pool = ENEMY_DB.filter(e => e.hp <= PLAYER.stats.level * 20 + 20);
+        if(pool.length === 0) pool = [ENEMY_DB[0]];
+        let enemyTmpl = pool[Math.floor(Math.random() * pool.length)];
+        startBattle(enemyTmpl);
+    }
+}
+
+// ==========================================
+// 8. BATTLE SYSTEM
+// ==========================================
+let battleModel = null;
+let battleEnemy = null;
+let battleTurn = 'player'; // 'player' or 'enemy'
+
+function showDmg(amount, color, isCrit) {
+    const el = document.createElement('div');
+    el.className = 'dmg-text';
+    el.innerText = amount;
+    el.style.color = color;
+    if(isCrit) { el.innerText += "!"; el.style.fontSize = "3rem"; }
+    
+    // Random screen pos center
+    el.style.left = (window.innerWidth/2 + (Math.random()*100 - 50)) + 'px';
+    el.style.top = (window.innerHeight/2 + (Math.random()*100 - 50)) + 'px';
+    
+    document.getElementById('dmg-container').appendChild(el);
+    setTimeout(()=>el.remove(), 1000);
+}
+
+function startDialogue(bossData) {
+    currentState = STATE.DIALOGUE;
+    document.getElementById('ui-hud').classList.add('hidden');
+    document.getElementById('ui-dialogue').classList.remove('hidden');
+    document.getElementById('dialogue-name').innerText = bossData.name;
+    document.getElementById('dialogue-text').innerText = bossData.dialog;
+    
+    // Render boss model in front of camera
+    if(battleModel) scene.remove(battleModel);
+    battleModel = Models[bossData.model]();
+    battleModel.scale.setScalar(bossData.scale);
+    placeEntityInFrontOfCamera(battleModel);
+}
+
+function placeEntityInFrontOfCamera(model) {
+    let dx = 0, dz = 0;
+    if(PLAYER.dir === 0) dz = -2;
+    if(PLAYER.dir === 1) dx = -2;
+    if(PLAYER.dir === 2) dz = 2;
+    if(PLAYER.dir === 3) dx = 2;
+    
+    model.position.set(PLAYER.x + dx, 0, PLAYER.y + dz);
+    model.lookAt(PLAYER.x, 0, PLAYER.y);
+    scene.add(model);
+}
+
+function startBattle(enemyData) {
+    currentState = STATE.BATTLE;
+    battleEnemy = JSON.parse(JSON.stringify(enemyData)); // Clone
+    battleEnemy.maxHp = battleEnemy.hp;
+    
+    document.getElementById('ui-hud').classList.add('hidden');
+    document.getElementById('ui-battle').classList.remove('hidden');
+    document.getElementById('battle-enemy-name').innerText = battleEnemy.name;
+    document.getElementById('battle-enemy-hp-bar').style.width = '100%';
+    document.getElementById('battle-log').innerText = `A ${battleEnemy.name} appears!`;
+    
+    // Build Model
+    if(battleModel) scene.remove(battleModel);
+    battleModel = Models[enemyData.model]();
+    battleModel.scale.setScalar(enemyData.scale);
+    placeEntityInFrontOfCamera(battleModel);
+    
+    SFX.roar();
+    battleTurn = 'player';
+    updateMagicMenu();
+}
+
+function logBattle(msg) {
+    document.getElementById('battle-log').innerText = msg;
+}
+
+function endBattle(victory) {
+    document.getElementById('ui-battle').classList.add('hidden');
+    if(battleModel) { scene.remove(battleModel); battleModel = null; }
+    
+    if(!victory) {
+        currentState = STATE.GAMEOVER;
+        document.getElementById('ui-menu').classList.remove('hidden');
+        document.getElementById('ui-menu').innerHTML = '<h1 class="text-6xl text-red-700">YOU DIED</h1><p class="mt-4 cursor-pointer" onclick="location.reload()">Click to restart</p>';
+        return;
+    }
+    
+    // Check if it was a boss
+    if(currentBossId >= 3) {
+        let bossKey = Object.keys(BOSS_DB)[currentBossId-3];
+        BOSS_DEFEATED[bossKey] = true;
+        mapGrid[PLAYER.y][PLAYER.x] = 0; // Clear tile
+        currentBossId = 0;
+        
+        // Check win condition
+        if(Object.values(BOSS_DEFEATED).every(v=>v)) {
+            currentState = STATE.GAMEOVER;
+            document.getElementById('ui-menu').classList.remove('hidden');
+            document.getElementById('ui-menu').innerHTML = '<h1 class="text-6xl text-yellow-500">YOU ESCAPED</h1><p class="mt-4 text-xl">The Goon Cave is cleansed.</p>';
+            return;
+        }
+    }
+
+    PLAYER.stats.exp += battleEnemy.exp;
+    PLAYER.stats.statPoints += battleEnemy.sp;
+    
+    // Check level up
+    let levelGained = false;
+    while(PLAYER.stats.exp >= PLAYER.stats.level * 50) {
+        PLAYER.stats.level++;
+        PLAYER.stats.maxHp += 10; PLAYER.stats.hp = PLAYER.stats.maxHp;
+        PLAYER.stats.maxMp += 5; PLAYER.stats.mp = PLAYER.stats.maxMp;
+        levelGained = true;
+        
+        // Unlock skills
+        SKILL_THRESHOLDS.forEach(st => {
+            if(PLAYER.stats.level === st.lvl && !PLAYER.skills.find(s=>s.name===st.skill.name)) {
+                PLAYER.skills.push(st.skill);
+            }
+        });
+    }
+    
+    if(PLAYER.stats.statPoints > 0) {
+        currentState = STATE.STATS;
+        document.getElementById('ui-levelup').classList.remove('hidden');
+        updateStatsUI();
+    } else {
+        resumeExploration();
+    }
+}
+
+function updateStatsUI() {
+    document.getElementById('stat-points').innerText = PLAYER.stats.statPoints;
+    ['atk','def','mag','agi','vit'].forEach(s => {
+        document.getElementById(`stat-${s}`).innerText = PLAYER.stats[s];
+    });
+}
+
+function resumeExploration() {
+    currentState = STATE.EXPLORE;
+    document.getElementById('ui-levelup').classList.add('hidden');
+    document.getElementById('ui-hud').classList.remove('hidden');
+    updateHUD();
+}
+
+function updateMagicMenu() {
+    const menu = document.getElementById('magic-menu');
+    menu.innerHTML = '';
+    PLAYER.skills.forEach(skill => {
+        if(skill.mp > 0) {
+            const btn = document.createElement('button');
+            btn.className = 'btn text-left text-blue-300';
+            btn.innerText = `${skill.name} (MP:${skill.mp})`;
+            btn.onclick = () => playerAction('magic', skill);
+            menu.appendChild(btn);
+        }
+    });
+}
+
+// Screen Shake
+function screenShake() {
+    let intense = 0.1;
+    let shakes = 5;
+    let iv = setInterval(() => {
+        camera.position.x += (Math.random()-0.5)*intense;
+        camera.position.y += (Math.random()-0.5)*intense;
+        shakes--;
+        if(shakes<=0) { clearInterval(iv); updateCameraPos(); } // reset
+    }, 50);
+}
+
+// Battle Actions
+function playerAction(type, skill=null) {
+    if(battleTurn !== 'player') return;
+    document.getElementById('magic-menu').classList.add('hidden');
+    battleTurn = 'animating';
+    
+    if(type === 'attack') {
+        let isCrit = Math.random() < (PLAYER.stats.agi * 0.05);
+        let dmg = Math.max(1, (PLAYER.stats.atk * 2) - battleEnemy.atk/2);
+        if(isCrit) dmg *= 2;
+        dmg = Math.floor(dmg * (0.8 + Math.random()*0.4));
+        
+        logBattle(`You attack!`);
+        SFX.hit(); if(isCrit) SFX.crit();
+        
+        // Attack Animation (dash forward)
+        let origZ = camera.position.z, origX = camera.position.x;
+        let dx=0, dz=0;
+        if(PLAYER.dir===0) dz=-0.5; if(PLAYER.dir===1) dx=-0.5; if(PLAYER.dir===2) dz=0.5; if(PLAYER.dir===3) dx=0.5;
+        
+        addTween(camera.position, 'x', origX+dx, 0.1, "easeOut", () => {
+             addTween(camera.position, 'x', origX, 0.2);
+             applyDmgToEnemy(dmg, isCrit);
+        });
+        addTween(camera.position, 'z', origZ+dz, 0.1, "easeOut", () => {
+             addTween(camera.position, 'z', origZ, 0.2);
+        });
+
+    } else if(type === 'magic') {
+        if(PLAYER.stats.mp < skill.mp) { logBattle("Not enough MP!"); battleTurn = 'player'; return; }
+        PLAYER.stats.mp -= skill.mp;
+        updateHUD();
+        
+        let dmg = Math.floor(PLAYER.stats.mag * skill.mult * (0.9 + Math.random()*0.2));
+        logBattle(`You cast ${skill.name}!`);
+        SFX.magic();
+        
+        // Flash screen
+        horrorShader.uniforms.rgbShift.value = 0.05;
+        setTimeout(()=>horrorShader.uniforms.rgbShift.value = 0.003, 300);
+        
+        setTimeout(() => applyDmgToEnemy(dmg, false, '#44aaff'), 500);
+
+    } else if(type === 'item') { // Hardcoded heal for simplicity
+        if(PLAYER.stats.mp < 10) { logBattle("Not enough MP!"); battleTurn = 'player'; return; }
+        PLAYER.stats.mp -= 10;
+        let heal = 30 + PLAYER.stats.mag*2;
+        PLAYER.stats.hp = Math.min(PLAYER.stats.maxHp, PLAYER.stats.hp + heal);
+        updateHUD();
+        logBattle(`You healed for ${heal} HP!`);
+        SFX.heal();
+        showDmg(heal, '#00ff00', false);
+        setTimeout(enemyTurn, 1000);
+    } else if(type === 'flee') {
+        if(currentBossId !== 0) { logBattle("You cannot flee a boss!"); battleTurn='player'; return; }
+        if(Math.random() < 0.5 + (PLAYER.stats.agi*0.02)) {
+            logBattle("Got away safely!");
+            setTimeout(() => endBattle(true), 1000);
+        } else {
+            logBattle("Failed to flee!");
+            setTimeout(enemyTurn, 1000);
+        }
+    }
+}
+
+function applyDmgToEnemy(dmg, isCrit, color='#ff0000') {
+    battleEnemy.hp -= dmg;
+    showDmg(dmg, color, isCrit);
+    
+    // Model Hit Reaction
+    if(battleModel) {
+        addTween(battleModel.position, 'y', 0.2, 0.1, "easeOut", () => {
+            addTween(battleModel.position, 'y', 0, 0.1);
+        });
+        horrorShader.uniforms.distortion.value = 0.3;
+        setTimeout(()=>horrorShader.uniforms.distortion.value = 0.15, 100);
+    }
+
+    let hpPct = Math.max(0, (battleEnemy.hp / battleEnemy.maxHp) * 100);
+    document.getElementById('battle-enemy-hp-bar').style.width = hpPct + '%';
+
+    if(battleEnemy.hp <= 0) {
+        logBattle(`${battleEnemy.name} defeated!`);
+        SFX.roar();
+        if(battleModel) addTween(battleModel.scale, 'y', 0.01, 0.5);
+        setTimeout(() => endBattle(true), 1500);
+    } else {
+        setTimeout(enemyTurn, 1000);
+    }
+}
+
+function enemyTurn() {
+    battleTurn = 'enemy';
+    logBattle(`${battleEnemy.name} attacks!`);
+    
+    // Enemy Attack Anim
+    if(battleModel) {
+        addTween(battleModel.scale, 'z', 1.5, 0.2, "easeOut", () => {
+            addTween(battleModel.scale, 'z', battleEnemy.scale, 0.2);
+        });
+    }
+
+    setTimeout(() => {
+        let isHit = Math.random() > (PLAYER.stats.agi * 0.02);
+        if(isHit) {
+            let dmg = Math.max(1, battleEnemy.atk - Math.floor(PLAYER.stats.def/2));
+            dmg = Math.floor(dmg * (0.8 + Math.random()*0.4));
+            PLAYER.stats.hp -= dmg;
+            updateHUD();
+            SFX.hit(); screenShake();
+            showDmg(dmg, '#ff0000', false);
+            logBattle(`You took ${dmg} damage!`);
+            
+            if(PLAYER.stats.hp <= 0) {
+                setTimeout(() => endBattle(false), 1500);
+                return;
+            }
+        } else {
+            logBattle(`${battleEnemy.name} missed!`);
+        }
+        setTimeout(() => { battleTurn = 'player'; logBattle("Your turn."); }, 1000);
+    }, 400);
+}
+
+
+// ==========================================
+// 9. EVENT LISTENERS
+// ==========================================
+function beginStory(mobile) {
+    isMobileControls = mobile;
+    SFX.init();
+    SFX.select();
+    
+    document.getElementById('ui-menu').classList.add('hidden');
+    document.getElementById('ui-story').classList.remove('hidden');
+    document.getElementById('ui-story').classList.add('flex');
+    currentState = STATE.STORY;
+    
+    if(isMobileControls) {
+        document.getElementById('mobile-controls').classList.remove('hidden');
+    } else {
+        document.getElementById('mobile-controls').classList.add('hidden');
+    }
+}
+
+document.getElementById('btn-start-pc').onclick = () => beginStory(false);
+document.getElementById('btn-start-mobile').onclick = () => beginStory(true);
+
+document.getElementById('btn-start-explore').onclick = () => {
+    SFX.select();
+    document.getElementById('ui-story').classList.add('hidden');
+    document.getElementById('ui-story').classList.remove('flex');
+    document.getElementById('ui-hud').classList.remove('hidden');
+    document.getElementById('scanlines').classList.remove('hidden');
+    generateMap();
+    updateCameraPos();
+    updateHUD();
+    currentState = STATE.EXPLORE;
+};
+
+// UI Buttons Battle
+document.getElementById('btn-atk').onclick = () => { SFX.hover(); playerAction('attack'); };
+document.getElementById('btn-mag').onclick = () => { 
+    SFX.hover();
+    const mm = document.getElementById('magic-menu');
+    mm.classList.toggle('hidden');
+};
+document.getElementById('btn-item').onclick = () => { SFX.hover(); playerAction('item'); };
+document.getElementById('btn-flee').onclick = () => { SFX.hover(); playerAction('flee'); };
+
+// UI Buttons Dialogue
+document.getElementById('btn-dialogue-next').onclick = () => {
+    SFX.select();
+    document.getElementById('ui-dialogue').classList.add('hidden');
+    if(currentBossId >= 3) {
+        startBattle(BOSS_DB[Object.keys(BOSS_DB)[currentBossId-3]]);
+    }
+};
+
+// UI Buttons Stats
+document.querySelectorAll('.stat-btn').forEach(btn => {
+    btn.onclick = (e) => {
+        if(PLAYER.stats.statPoints > 0) {
+            SFX.hover();
+            PLAYER.stats.statPoints--;
+            let stat = e.target.getAttribute('data-stat');
+            PLAYER.stats[stat]++;
+            if(stat==='vit') { PLAYER.stats.maxHp+=5; PLAYER.stats.hp+=5; }
+            if(stat==='mag') { PLAYER.stats.maxMp+=2; PLAYER.stats.mp+=2; }
+            updateStatsUI();
+            updateHUD();
+        }
+    };
+});
+document.getElementById('btn-continue').onclick = () => { SFX.select(); resumeExploration(); };
+
+// Input Handling
+window.addEventListener('keydown', (e) => {
+    if(currentState === STATE.EXPLORE) {
+        let key = e.key.toLowerCase();
+        if(key === 'w' || e.key === 'ArrowUp') movePlayer(true);
+        if(key === 's' || e.key === 'ArrowDown') movePlayer(false);
+        if(key === 'a' || e.key === 'ArrowLeft') turnPlayer(false);
+        if(key === 'd' || e.key === 'ArrowRight') turnPlayer(true);
+        if(key === 'q') movePlayer(true, true); // Dash 2 spaces
+    }
+});
+
+// Mobile HUD Buttons
+document.getElementById('btn-move-up').onclick = () => movePlayer(true);
+document.getElementById('btn-move-down').onclick = () => movePlayer(false);
+document.getElementById('btn-move-left').onclick = () => turnPlayer(false);
+document.getElementById('btn-move-right').onclick = () => turnPlayer(true);
+
+// Sound on hover for generic buttons
+document.querySelectorAll('.btn').forEach(b => {
+    b.addEventListener('mouseenter', () => { if(currentState !== STATE.MENU) SFX.hover(); });
+});
+
+// ==========================================
+// 10. MAIN RENDER LOOP
+// ==========================================
+const clock = new THREE.Clock();
+let time = 0;
+
+function animate() {
+    requestAnimationFrame(animate);
+    const dt = clock.getDelta();
+    time += dt;
+
+    if(currentState === STATE.EXPLORE || currentState === STATE.BATTLE || currentState === STATE.DIALOGUE) {
+        updateTweens(dt);
+
+        // Environmental Audio
+        if(currentState === STATE.EXPLORE) {
+            SFX.ambientDrip();
+            SFX.ambientDrone();
+        }
+
+        // Flashlight flicker horror effect
+        flashlightFlicker += dt;
+        if(flashlightFlicker > 0.1) {
+            flashLight.intensity = 1.2 + Math.random() * 0.6;
+            flashlightFlicker = 0;
+        }
+
+        // Idle animations for enemy models
+        if(battleModel) {
+            battleModel.position.y = Math.sin(time * 3) * 0.1;
+        }
+
+        // Render to texture
+        renderer.setRenderTarget(renderTarget);
+        renderer.render(scene, camera);
+
+        // Render full screen quad with shader
+        renderer.setRenderTarget(null);
+        horrorShader.uniforms.tDiffuse.value = renderTarget.texture;
+        horrorShader.uniforms.time.value = time;
+        renderer.render(orthoScene, orthoCamera);
+    } else {
+        // Just clear in menu
+        renderer.setRenderTarget(null);
+        renderer.clear();
+    }
+}
+
+// Start
+animate();
+
+</script>
+</body>
+</html>
